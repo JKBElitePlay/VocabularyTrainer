@@ -57,6 +57,7 @@ class TrainingCreate(BaseModel):
     answer_direction: Literal["de-en", "en-de"] = "de-en"
     target_questions: Literal[10, 20, 30, 50, 75, 100] = 10
     only_below_90_percent: bool = False
+    max_correct_percent: int = Field(default=90, ge=1, le=100)
     categories: list[str] | None = None
     include_uncategorized: bool = True
 

@@ -483,7 +483,58 @@ def test_below_90_percent_training_requires_previously_answered_vocabulary(tmp_p
         )
 
         assert response.status_code == 400
-        assert "weniger als 90 %" in response.json()["detail"]
+        assert "gewählten Prozentsatz" in response.json()["detail"]
+
+
+def test_training_filters_vocabulary_by_the_selected_correct_answer_percentage(tmp_path):
+    with make_client(tmp_path) as client:
+        folder = client.post("/api/folders", json={"name": "Prozentgrenze"}).json()
+        words = [
+            client.post(
+                f"/api/folders/{folder['id']}/vocabulary",
+                json={"german": f"Wort {index}", "english": f"word {index}"},
+            ).json()
+            for index in range(3)
+        ]
+        for word, correct_count in zip(words, (1, 2, 3), strict=True):
+            history = client.post(
+                "/api/training",
+                json={"folder_id": folder["id"], "game_mode": "de-en"},
+            ).json()
+            for index in range(4):
+                result = client.post(
+                    f"/api/training/{history['id']}/answers",
+                    json={
+                        "vocabulary_id": word["id"],
+                        "answer": word["english"] if index < correct_count else "wrong",
+                    },
+                )
+                assert result.status_code == 200
+
+        training = client.post(
+            "/api/training",
+            json={
+                "folder_id": folder["id"],
+                "game_mode": "de-en",
+                "only_below_90_percent": True,
+                "max_correct_percent": 50,
+                "target_questions": 10,
+            },
+        )
+        assert training.status_code == 201
+        assert training.json()["max_correct_percent"] == 50
+        question = client.get(f"/api/training/{training.json()['id']}/question").json()
+        assert question["vocabulary_id"] == words[0]["id"]
+
+        assert client.post(
+            "/api/training",
+            json={
+                "folder_id": folder["id"],
+                "game_mode": "de-en",
+                "only_below_90_percent": True,
+                "max_correct_percent": 0,
+            },
+        ).status_code == 422
 
 
 def test_below_90_percent_training_respects_the_selected_question_count(tmp_path):

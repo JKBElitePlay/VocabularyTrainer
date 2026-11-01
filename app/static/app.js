@@ -39,6 +39,7 @@ function savePracticeSettings() {
     answerDirection: $("#answer-direction").value,
     targetQuestions: Number($("#question-count").value),
     onlyBelow90Percent: $("#only-below-90-percent").checked,
+    maxCorrectPercent: Number($("#max-correct-percent").value),
     categoryFolderId: folderId,
     categories: [...document.querySelectorAll(".training-category:checked")]
       .map((checkbox) => checkbox.value),
@@ -265,6 +266,15 @@ async function loadPracticeFolders() {
     $("#question-count").value = String(savedPracticeSettings.targetQuestions);
   }
   $("#only-below-90-percent").checked = savedPracticeSettings?.onlyBelow90Percent === true;
+  if (Number.isInteger(savedPracticeSettings?.maxCorrectPercent)
+    && savedPracticeSettings.maxCorrectPercent >= 1
+    && savedPracticeSettings.maxCorrectPercent <= 100) {
+    $("#max-correct-percent").value = String(savedPracticeSettings.maxCorrectPercent);
+  }
+  $("#max-correct-percent-value").value = `${$("#max-correct-percent").value} %`;
+  $("#correct-percent-setting").classList.toggle(
+    "d-none", !$("#only-below-90-percent").checked
+  );
   $("#question-count-setting").classList.remove("d-none");
   $("#flashcard-direction").classList.toggle("d-none", $("#game-mode").value !== "flashcards");
   $("#practice-categories").classList.toggle("d-none", !state.folders.length);
@@ -337,7 +347,14 @@ $("#game-mode").addEventListener("change", () => {
 
 $("#answer-direction").addEventListener("change", savePracticeSettings);
 $("#question-count").addEventListener("change", savePracticeSettings);
-$("#only-below-90-percent").addEventListener("change", savePracticeSettings);
+$("#only-below-90-percent").addEventListener("change", (event) => {
+  $("#correct-percent-setting").classList.toggle("d-none", !event.target.checked);
+  savePracticeSettings();
+});
+$("#max-correct-percent").addEventListener("input", (event) => {
+  $("#max-correct-percent-value").value = `${event.target.value} %`;
+  savePracticeSettings();
+});
 
 $("#start-practice").addEventListener("click", async () => {
   try {
@@ -356,6 +373,7 @@ $("#start-practice").addEventListener("click", async () => {
         answer_direction: direction,
         target_questions: targetQuestions,
         only_below_90_percent: $("#only-below-90-percent").checked,
+        max_correct_percent: Number($("#max-correct-percent").value),
         categories,
         include_uncategorized: includeUncategorized
       })

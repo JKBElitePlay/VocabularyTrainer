@@ -72,12 +72,19 @@
       <div id="practice-setup" class="card p-4">
         <label class="form-label" for="practice-folder">Welche Mappe möchtest du üben?</label>
         <select id="practice-folder" class="form-select mb-3"></select>
-        <div class="form-check mb-3">
+        <div class="form-check mb-2">
           <input id="only-below-90-percent" class="form-check-input" type="checkbox">
           <label class="form-check-label" for="only-below-90-percent">
-            Nur Vokabeln mit weniger als 90 % richtigen Antworten üben
+            Nur Vokabeln unter diesem Anteil richtiger Antworten üben
           </label>
-          <div class="form-text">Die eingestellte Anzahl begrenzt die Vokabeln aus dieser Auswahl.</div>
+        </div>
+        <div id="correct-percent-setting" class="ms-4 mb-3">
+          <label class="form-label d-flex justify-content-between" for="max-correct-percent">
+            <span>Grenzwert für richtige Antworten</span>
+            <output id="max-correct-percent-value" for="max-correct-percent">90 %</output>
+          </label>
+          <input id="max-correct-percent" class="form-range" type="range" min="1" max="100" step="1" value="90">
+          <div class="form-text">Berücksichtigt werden Vokabeln mit weniger als diesem Prozentsatz. Die Anzahl begrenzt die Auswahl.</div>
         </div>
         <fieldset id="practice-categories" class="border rounded-3 p-3 mb-3 d-none">
           <legend class="float-none w-auto px-1 fs-6 fw-bold mb-1">Welche Kategorien möchtest du üben?</legend>

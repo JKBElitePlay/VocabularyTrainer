@@ -323,13 +323,14 @@ def create_app(database_url: str | None = None) -> FastAPI:
             )
             training_query = training_query.where(
                 answer_count > 0,
-                Vocabulary.correct_count * 10 < answer_count * 9,
+                Vocabulary.correct_count * 100
+                < answer_count * payload.max_correct_percent,
             )
             vocabulary_ids = sorted(db.scalars(training_query.with_only_columns(Vocabulary.id)).all())
             if not vocabulary_ids:
                 raise HTTPException(
                     400,
-                    "Diese Mappe enthält keine Vokabeln mit weniger als 90 % richtigen Antworten.",
+                    "Diese Mappe enthält keine Vokabeln unter dem gewählten Prozentsatz richtiger Antworten.",
                 )
         elif not db.scalar(select(func.count()).select_from(training_query.subquery())):
             raise HTTPException(400, "Diese Mappe enthält noch keine Vokabeln.")
@@ -366,6 +367,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
             "target_questions": session.target_questions,
             "category_filter": category_filter,
             "only_below_90_percent": vocabulary_ids is not None,
+            "max_correct_percent": payload.max_correct_percent,
             "total_questions": session.total_questions,
         }
 
