@@ -61,6 +61,7 @@ class TrainingSession(Base):
     answer_direction: Mapped[str] = mapped_column(String(5), default="de-en")
     target_questions: Mapped[int] = mapped_column(Integer, default=10)
     category_filter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vocabulary_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     folder_id: Mapped[int] = mapped_column(
         ForeignKey("vocabulary_folders.id", ondelete="CASCADE")
     )

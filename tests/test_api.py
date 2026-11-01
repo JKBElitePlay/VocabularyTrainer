@@ -144,6 +144,51 @@ def test_training_shows_every_unasked_word_before_repeating_a_correct_one(tmp_pa
         assert client.get(f"/api/training/{session['id']}").json()["target_questions"] == 10
 
 
+def test_training_repeats_missed_words_after_the_planned_questions_until_correct(tmp_path):
+    with make_client(tmp_path) as client:
+        folder = client.post("/api/folders", json={"name": "Wiederholen"}).json()
+        word = client.post(
+            f"/api/folders/{folder['id']}/vocabulary",
+            json={"german": "Haus", "english": "house"},
+        ).json()
+        session = client.post(
+            "/api/training",
+            json={"folder_id": folder["id"], "game_mode": "de-en", "target_questions": 10},
+        ).json()
+
+        for index in range(10):
+            question = client.get(f"/api/training/{session['id']}/question").json()
+            assert question["complete"] is False
+            result = client.post(
+                f"/api/training/{session['id']}/answers",
+                json={
+                    "vocabulary_id": word["id"],
+                    "answer": "hous" if index == 0 else "wrong",
+                },
+            ).json()
+            assert result["complete"] is False
+            assert result["result_type"] == ("partial" if index == 0 else "wrong")
+
+        retry = client.get(f"/api/training/{session['id']}/question").json()
+        assert retry["complete"] is False
+        assert retry["vocabulary_id"] == word["id"]
+        result = client.post(
+            f"/api/training/{session['id']}/answers",
+            json={"vocabulary_id": word["id"], "answer": "wrong"},
+        ).json()
+        assert result["complete"] is False
+
+        retry_again = client.get(f"/api/training/{session['id']}/question").json()
+        assert retry_again["complete"] is False
+        result = client.post(
+            f"/api/training/{session['id']}/answers",
+            json={"vocabulary_id": word["id"], "answer": "house"},
+        ).json()
+        assert result["complete"] is True
+        assert result["total_questions"] == 12
+        assert client.get(f"/api/training/{session['id']}/question").json()["complete"] is True
+
+
 def test_flashcard_direction_and_question_count_are_saved_per_session(tmp_path):
     with make_client(tmp_path) as client:
         folder = client.post("/api/folders", json={"name": "Richtung"}).json()
@@ -321,6 +366,174 @@ def test_training_requires_at_least_one_selected_category(tmp_path):
             },
         )
         assert response.status_code == 400
+
+
+def test_training_can_practice_all_vocabulary_below_90_percent_in_every_mode(tmp_path):
+    with make_client(tmp_path) as client:
+        folder = client.post("/api/folders", json={"name": "Wiederholungsmappe"}).json()
+        words = {
+            german: client.post(
+                f"/api/folders/{folder['id']}/vocabulary",
+                json={"german": german, "english": english},
+            ).json()
+            for german, english in (
+                ("Haus", "house"),
+                ("Hund", "dog"),
+                ("Katze", "cat"),
+                ("Brot", "bread"),
+            )
+        }
+
+        for german, correct_count, wrong_count in (
+            ("Haus", 8, 2),
+            ("Hund", 1, 1),
+            ("Katze", 9, 1),
+            ("Brot", 10, 0),
+        ):
+            history = client.post(
+                "/api/training",
+                json={"folder_id": folder["id"], "game_mode": "de-en", "target_questions": 10},
+            ).json()
+            word = words[german]
+            for index in range(correct_count + wrong_count):
+                result = client.post(
+                    f"/api/training/{history['id']}/answers",
+                    json={
+                        "vocabulary_id": word["id"],
+                        "answer": word["english"] if index < correct_count else "wrong",
+                    },
+                )
+                assert result.status_code == 200
+
+        eligible_ids = {words["Haus"]["id"], words["Hund"]["id"]}
+        for game_mode in ("de-en", "en-de", "flashcards", "matching"):
+            training = client.post(
+                "/api/training",
+                json={
+                    "folder_id": folder["id"],
+                    "game_mode": game_mode,
+                    "target_questions": 100,
+                    "only_below_90_percent": True,
+                },
+            ).json()
+            assert training["target_questions"] == len(eligible_ids)
+            assert training["only_below_90_percent"] is True
+
+            if game_mode == "matching":
+                round_data = client.get(
+                    f"/api/training/{training['id']}/matching"
+                ).json()
+                questions = round_data["left"]
+                assert {item["id"] for item in questions} == eligible_ids
+                answers = [
+                    client.post(
+                        f"/api/training/{training['id']}/answers",
+                        json={"vocabulary_id": item["id"], "result_type": "correct"},
+                    )
+                    for item in questions
+                ]
+            else:
+                seen_ids = set()
+                answers = []
+                for _ in range(len(eligible_ids)):
+                    question = client.get(
+                        f"/api/training/{training['id']}/question"
+                    ).json()
+                    vocabulary_id = question["vocabulary_id"]
+                    seen_ids.add(vocabulary_id)
+                    word = next(
+                        word for word in words.values() if word["id"] == vocabulary_id
+                    )
+                    if game_mode == "flashcards":
+                        answer = {"vocabulary_id": vocabulary_id, "result_type": "correct"}
+                    else:
+                        answer = {
+                            "vocabulary_id": vocabulary_id,
+                            "answer": word["english"] if game_mode == "de-en" else word["german"],
+                        }
+                    answers.append(
+                        client.post(
+                            f"/api/training/{training['id']}/answers", json=answer
+                        )
+                    )
+                assert seen_ids == eligible_ids
+            assert all(answer.status_code == 200 for answer in answers)
+            assert answers[-1].json()["complete"] is True
+            assert client.post(
+                f"/api/training/{training['id']}/answers",
+                json={"vocabulary_id": words["Katze"]["id"], "answer": "cat"},
+            ).status_code == 404
+
+
+def test_below_90_percent_training_requires_previously_answered_vocabulary(tmp_path):
+    with make_client(tmp_path) as client:
+        folder = client.post("/api/folders", json={"name": "Noch keine Fehler"}).json()
+        client.post(
+            f"/api/folders/{folder['id']}/vocabulary",
+            json={"german": "Haus", "english": "house"},
+        )
+
+        response = client.post(
+            "/api/training",
+            json={
+                "folder_id": folder["id"],
+                "game_mode": "de-en",
+                "only_below_90_percent": True,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "weniger als 90 %" in response.json()["detail"]
+
+
+def test_below_90_percent_training_respects_the_selected_question_count(tmp_path):
+    with make_client(tmp_path) as client:
+        folder = client.post("/api/folders", json={"name": "Begrenzte Wiederholung"}).json()
+        words = [
+            client.post(
+                f"/api/folders/{folder['id']}/vocabulary",
+                json={"german": f"Wort {index}", "english": f"word {index}"},
+            ).json()
+            for index in range(12)
+        ]
+        for word in words:
+            history = client.post(
+                "/api/training",
+                json={"folder_id": folder["id"], "game_mode": "de-en"},
+            ).json()
+            result = client.post(
+                f"/api/training/{history['id']}/answers",
+                json={"vocabulary_id": word["id"], "answer": "falsch"},
+            )
+            assert result.status_code == 200
+
+        training = client.post(
+            "/api/training",
+            json={
+                "folder_id": folder["id"],
+                "game_mode": "de-en",
+                "target_questions": 10,
+                "only_below_90_percent": True,
+            },
+        ).json()
+        assert training["target_questions"] == 10
+
+        answered_ids = set()
+        for _ in range(10):
+            question = client.get(
+                f"/api/training/{training['id']}/question"
+            ).json()
+            assert question["vocabulary_id"] not in answered_ids
+            answered_ids.add(question["vocabulary_id"])
+            word = next(word for word in words if word["id"] == question["vocabulary_id"])
+            result = client.post(
+                f"/api/training/{training['id']}/answers",
+                json={"vocabulary_id": word["id"], "answer": word["english"]},
+            ).json()
+
+        assert len(answered_ids) == 10
+        assert result["complete"] is True
+        assert client.get(f"/api/training/{training['id']}/question").json()["complete"] is True
 
 
 def test_csv_preview_skips_duplicates_and_reports_bad_rows(tmp_path):

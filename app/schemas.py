@@ -56,6 +56,7 @@ class TrainingCreate(BaseModel):
     game_mode: Literal["de-en", "en-de", "flashcards", "matching"]
     answer_direction: Literal["de-en", "en-de"] = "de-en"
     target_questions: Literal[10, 20, 30, 50, 75, 100] = 10
+    only_below_90_percent: bool = False
     categories: list[str] | None = None
     include_uncategorized: bool = True
 

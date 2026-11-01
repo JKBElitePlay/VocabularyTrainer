@@ -62,6 +62,13 @@ def create_app(database_url: str | None = None) -> FastAPI:
                     "ADD COLUMN category_filter TEXT"
                 )
             )
+        if "vocabulary_ids" not in training_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE training_sessions "
+                    "ADD COLUMN vocabulary_ids TEXT"
+                )
+            )
     application.state.engine = engine
     application.state.session_factory = session_factory
 
@@ -309,7 +316,22 @@ def create_app(database_url: str | None = None) -> FastAPI:
             category_filter = None
         training_query = select(Vocabulary).where(Vocabulary.folder_id == payload.folder_id)
         training_query = apply_category_filter(training_query, category_filter)
-        if not db.scalar(select(func.count()).select_from(training_query.subquery())):
+        vocabulary_ids = None
+        if payload.only_below_90_percent:
+            answer_count = (
+                Vocabulary.correct_count + Vocabulary.partial_count + Vocabulary.wrong_count
+            )
+            training_query = training_query.where(
+                answer_count > 0,
+                Vocabulary.correct_count * 10 < answer_count * 9,
+            )
+            vocabulary_ids = sorted(db.scalars(training_query.with_only_columns(Vocabulary.id)).all())
+            if not vocabulary_ids:
+                raise HTTPException(
+                    400,
+                    "Diese Mappe enthält keine Vokabeln mit weniger als 90 % richtigen Antworten.",
+                )
+        elif not db.scalar(select(func.count()).select_from(training_query.subquery())):
             raise HTTPException(400, "Diese Mappe enthält noch keine Vokabeln.")
         session = TrainingSession(
             folder_id=payload.folder_id,
@@ -319,11 +341,18 @@ def create_app(database_url: str | None = None) -> FastAPI:
                 if payload.game_mode == "flashcards"
                 else ("en-de" if payload.game_mode == "en-de" else "de-en")
             ),
-            target_questions=payload.target_questions,
+            target_questions=(
+                min(payload.target_questions, len(vocabulary_ids))
+                if vocabulary_ids is not None
+                else payload.target_questions
+            ),
             category_filter=(
                 json.dumps(category_filter, ensure_ascii=False)
                 if category_filter is not None
                 else None
+            ),
+            vocabulary_ids=(
+                json.dumps(vocabulary_ids) if vocabulary_ids is not None else None
             ),
         )
         db.add(session)
@@ -336,6 +365,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
             "answer_direction": session.answer_direction,
             "target_questions": session.target_questions,
             "category_filter": category_filter,
+            "only_below_90_percent": vocabulary_ids is not None,
             "total_questions": session.total_questions,
         }
 
@@ -344,7 +374,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         session = db.get(TrainingSession, session_id)
         if session is None:
             raise HTTPException(404, "Lernsitzung nicht gefunden.")
-        if session.total_questions >= session.target_questions:
+        if training_is_complete(session, db):
             return {"complete": True}
         selected = select_training_vocabulary(session, db)
         if selected is None:
@@ -376,10 +406,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
             raise HTTPException(404, "Lernsitzung nicht gefunden.")
         if session.game_mode != "matching":
             raise HTTPException(400, "Diese Lernsitzung verwendet kein Zuordnungsspiel.")
-        if session.total_questions >= session.target_questions:
+        if training_is_complete(session, db):
             return {"complete": True, "left": [], "right": []}
         chosen = []
-        for _ in range(min(5, session.target_questions - session.total_questions)):
+        questions_to_select = (
+            5
+            if session.total_questions >= session.target_questions
+            else min(5, session.target_questions - session.total_questions)
+        )
+        for _ in range(questions_to_select):
             word = select_training_vocabulary(session, db, exclude_ids={item.id for item in chosen})
             if word is None:
                 break
@@ -422,8 +457,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ) is None:
             raise HTTPException(404, "Vokabel gehört nicht zu dieser Lernsitzung.")
 
-        if session.total_questions >= session.target_questions:
-            raise HTTPException(409, "Die gewählte Anzahl an Fragen wurde bereits erreicht.")
+        if training_is_complete(session, db):
+            raise HTTPException(409, "Diese Lernsitzung ist bereits abgeschlossen.")
         if session.game_mode == "matching" and payload.result_type is None:
             raise HTTPException(422, "Bitte übermittle das Ergebnis der Zuordnung.")
         target_is_english = (
@@ -482,7 +517,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
             answer=payload.answer,
             points=points,
             message=messages[result_type],
-            complete=session.total_questions >= session.target_questions,
+            complete=training_is_complete(session, db),
             total_questions=session.total_questions,
             target_questions=session.target_questions,
         )
@@ -592,20 +627,32 @@ def select_training_vocabulary(
     exclude_ids: set[int] | None = None,
 ) -> Vocabulary | None:
     """Select unasked words first, then latest misses, then latest correct answers."""
+    results = db.scalars(
+        select(TrainingResult)
+        .where(TrainingResult.session_id == session.id)
+        .order_by(TrainingResult.created_at.desc(), TrainingResult.id.desc())
+    ).all()
     words = db.scalars(training_vocabulary_query(session)).all()
     if exclude_ids:
         words = [word for word in words if word.id not in exclude_ids]
     if not words:
         return None
 
-    results = db.scalars(
-        select(TrainingResult)
-        .where(TrainingResult.session_id == session.id)
-        .order_by(TrainingResult.created_at.desc(), TrainingResult.id.desc())
-    ).all()
     latest_result = {}
+    correctly_answered = set()
     for result in results:
         latest_result.setdefault(result.vocabulary_id, result.result_type)
+        if result.result_type == "correct":
+            correctly_answered.add(result.vocabulary_id)
+
+    if session.total_questions >= session.target_questions:
+        words = [
+            word
+            for word in words
+            if word.id in latest_result and word.id not in correctly_answered
+        ]
+        if not words:
+            return None
 
     priority = {"wrong": 0, "partial": 1, "correct": 2}
     highest_priority = min(
@@ -622,9 +669,31 @@ def select_training_vocabulary(
     return random.choices(candidates, weights=weights, k=1)[0]
 
 
+def training_is_complete(session: TrainingSession, db: Session) -> bool:
+    """Complete the planned lesson only after every missed word has been answered correctly."""
+    if session.total_questions < session.target_questions:
+        return False
+
+    results = db.execute(
+        select(TrainingResult.vocabulary_id, TrainingResult.result_type).where(
+            TrainingResult.session_id == session.id
+        )
+    ).all()
+    answered = {vocabulary_id for vocabulary_id, _ in results}
+    correctly_answered = {
+        vocabulary_id
+        for vocabulary_id, result_type in results
+        if result_type == "correct"
+    }
+    return answered <= correctly_answered
+
+
 def training_vocabulary_query(session: TrainingSession):
     """Build the vocabulary query restricted to the session's selected categories."""
     query = select(Vocabulary).where(Vocabulary.folder_id == session.folder_id)
+    if session.vocabulary_ids is not None:
+        vocabulary_ids = json.loads(session.vocabulary_ids)
+        query = query.where(Vocabulary.id.in_(vocabulary_ids))
     category_filter = (
         json.loads(session.category_filter) if session.category_filter is not None else None
     )

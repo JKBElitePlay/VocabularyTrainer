@@ -29,7 +29,9 @@ werden. Die interaktive API-Dokumentation findet sich unter
 - Deutsch → Englisch, Englisch → Deutsch, Karteikarten und Zuordnungsspiel
 - Wählbare Karteikartenrichtung und Rundenlänge (10, 20, 30, 50, 75 oder 100 Fragen)
 - Training nach ausgewählten Vokabelkategorien mit Wortanzahl pro Kategorie
-- Erst ungestellte Vokabeln, danach zuletzt falsche und schließlich richtige Antworten
+- Optional eine einstellbare Anzahl Vokabeln einer Mappe mit weniger als 90 % richtigen Antworten in jedem Spielmodus üben
+- Letzte Lerneinstellungen wie Mappe, Spielmodus, Kategorien, Richtung, Fragezahl und Wiederholungsfilter im Browser speichern
+- Erst ungestellte Vokabeln; falsch oder nur teilweise beantwortete Vokabeln werden nach der Lektion bis zur ersten richtigen Antwort wiederholt
 - Tippfehlerbewertung, Hilfen mit Punkteabzug und gewichtete Wiederholung
 - Tages-Badges, Lernserie, Erfolgsquote und Wortschatz-Statistiken
 

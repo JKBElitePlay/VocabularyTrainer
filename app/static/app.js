@@ -1,5 +1,14 @@
 const $ = (selector) => document.querySelector(selector);
 const state = { folders: [], folderId: null, sessionId: null, mode: null, direction: "de-en", targetQuestions: 10, totalQuestions: 0, question: null, helpUsed: false, matched: new Set(), selectedLeft: null, selectedRight: null };
+const practiceSettingsKey = "vokabel-freunde.practice-settings";
+let savedPracticeSettings = null;
+
+try {
+  const saved = localStorage.getItem(practiceSettingsKey);
+  savedPracticeSettings = saved ? JSON.parse(saved) : null;
+} catch (error) {
+  notice(`Die gespeicherten Lerneinstellungen konnten nicht geladen werden: ${error.message}`, "danger");
+}
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -20,6 +29,26 @@ function escapeHtml(value = "") {
 
 function vocabularyCountLabel(count) {
   return `${count} ${count === 1 ? "Vokabel" : "Vokabeln"}`;
+}
+
+function savePracticeSettings() {
+  const folderId = Number($("#practice-folder").value) || null;
+  savedPracticeSettings = {
+    folderId,
+    gameMode: $("#game-mode").value,
+    answerDirection: $("#answer-direction").value,
+    targetQuestions: Number($("#question-count").value),
+    onlyBelow90Percent: $("#only-below-90-percent").checked,
+    categoryFolderId: folderId,
+    categories: [...document.querySelectorAll(".training-category:checked")]
+      .map((checkbox) => checkbox.value),
+    includeUncategorized: $("#include-uncategorized")?.checked || false,
+  };
+  try {
+    localStorage.setItem(practiceSettingsKey, JSON.stringify(savedPracticeSettings));
+  } catch (error) {
+    notice(`Die Lerneinstellungen konnten nicht gespeichert werden: ${error.message}`, "danger");
+  }
 }
 
 function notice(message, kind = "success") {
@@ -222,12 +251,33 @@ async function loadPracticeFolders() {
   const select = $("#practice-folder");
   select.innerHTML = state.folders.map((folder) => `<option value="${folder.id}">${escapeHtml(folder.name)} (${vocabularyCountLabel(folder.vocabulary_count)})</option>`).join("");
   if (!state.folders.length) select.innerHTML = '<option value="">Erstelle zuerst eine Mappe</option>';
+  const savedFolderExists = state.folders.some(
+    (folder) => folder.id === savedPracticeSettings?.folderId
+  );
+  if (savedFolderExists) select.value = String(savedPracticeSettings.folderId);
+  if (["de-en", "en-de", "flashcards", "matching"].includes(savedPracticeSettings?.gameMode)) {
+    $("#game-mode").value = savedPracticeSettings.gameMode;
+  }
+  if (["de-en", "en-de"].includes(savedPracticeSettings?.answerDirection)) {
+    $("#answer-direction").value = savedPracticeSettings.answerDirection;
+  }
+  if ([10, 20, 30, 50, 75, 100].includes(savedPracticeSettings?.targetQuestions)) {
+    $("#question-count").value = String(savedPracticeSettings.targetQuestions);
+  }
+  $("#only-below-90-percent").checked = savedPracticeSettings?.onlyBelow90Percent === true;
+  $("#question-count-setting").classList.remove("d-none");
+  $("#flashcard-direction").classList.toggle("d-none", $("#game-mode").value !== "flashcards");
   $("#practice-categories").classList.toggle("d-none", !state.folders.length);
-  if (state.folders.length) await loadPracticeCategories();
+  if (state.folders.length) {
+    await loadPracticeCategories();
+    savePracticeSettings();
+  }
 }
 
 $("#practice-folder").addEventListener("change", () => {
-  loadPracticeCategories().catch((error) => notice(error.message, "danger"));
+  loadPracticeCategories()
+    .then(savePracticeSettings)
+    .catch((error) => notice(error.message, "danger"));
 });
 
 async function loadPracticeCategories() {
@@ -239,22 +289,31 @@ async function loadPracticeCategories() {
     return;
   }
   const data = await api(`/api/folders/${folderId}/categories`);
+  const restoreCategories = savedPracticeSettings?.categoryFolderId === folderId;
+  const selectedCategories = new Set(
+    restoreCategories && Array.isArray(savedPracticeSettings.categories)
+      ? savedPracticeSettings.categories
+      : data.categories.map((category) => category.name)
+  );
   const categoryOptions = data.categories.map((category) => `
     <label class="form-check d-flex justify-content-between align-items-center">
-      <span><input class="form-check-input training-category" type="checkbox" value="${escapeHtml(category.name)}" checked>
+      <span><input class="form-check-input training-category" type="checkbox" value="${escapeHtml(category.name)}" ${selectedCategories.has(category.name) ? "checked" : ""}>
       <span class="form-check-label ms-1">${escapeHtml(category.name)}</span></span>
       <span class="badge text-bg-light">${vocabularyCountLabel(category.count)}</span>
     </label>`).join("");
   const uncategorizedOption = data.uncategorized_count ? `
     <label class="form-check d-flex justify-content-between align-items-center">
-      <span><input id="include-uncategorized" class="form-check-input" type="checkbox" checked>
+      <span><input id="include-uncategorized" class="form-check-input" type="checkbox" ${!restoreCategories || savedPracticeSettings?.includeUncategorized ? "checked" : ""}>
       <span class="form-check-label ms-1">Ohne Kategorie</span></span>
       <span class="badge text-bg-light">${vocabularyCountLabel(data.uncategorized_count)}</span>
     </label>` : "";
   options.innerHTML = categoryOptions + uncategorizedOption
     || '<p class="small text-secondary mb-0">In dieser Mappe gibt es keine Vokabeln.</p>';
   options.querySelectorAll("input").forEach((checkbox) => {
-    checkbox.addEventListener("change", updateCategoryCount);
+    checkbox.addEventListener("change", () => {
+      updateCategoryCount();
+      savePracticeSettings();
+    });
   });
   $("#practice-categories").classList.remove("d-none");
   updateCategoryCount();
@@ -273,7 +332,12 @@ function updateCategoryCount() {
 
 $("#game-mode").addEventListener("change", () => {
   $("#flashcard-direction").classList.toggle("d-none", $("#game-mode").value !== "flashcards");
+  savePracticeSettings();
 });
+
+$("#answer-direction").addEventListener("change", savePracticeSettings);
+$("#question-count").addEventListener("change", savePracticeSettings);
+$("#only-below-90-percent").addEventListener("change", savePracticeSettings);
 
 $("#start-practice").addEventListener("click", async () => {
   try {
@@ -291,6 +355,7 @@ $("#start-practice").addEventListener("click", async () => {
         game_mode: mode,
         answer_direction: direction,
         target_questions: targetQuestions,
+        only_below_90_percent: $("#only-below-90-percent").checked,
         categories,
         include_uncategorized: includeUncategorized
       })
@@ -314,9 +379,12 @@ async function loadQuestion() {
   }
   state.helpUsed = false;
   const flashcards = state.mode === "flashcards";
+  const progress = state.totalQuestions >= state.targetQuestions
+    ? "Wiederholung"
+    : `Frage ${state.totalQuestions + 1} / ${state.targetQuestions}`;
   $("#training-area").classList.remove("d-none");
   $("#training-area").innerHTML = `<div class="card question-card p-4 p-md-5">
-    <div class="d-flex justify-content-between"><span class="badge text-bg-light">Frage ${state.totalQuestions + 1} / ${state.targetQuestions}</span><button id="stop-training" class="btn btn-sm btn-outline-secondary rounded-pill">Beenden</button></div>
+    <div class="d-flex justify-content-between"><span class="badge text-bg-light">${progress}</span><button id="stop-training" class="btn btn-sm btn-outline-secondary rounded-pill">Beenden</button></div>
     <p class="eyebrow mt-4">${state.question.translation === "de-en" ? "Deutsch → Englisch" : "Englisch → Deutsch"}</p>
     <div class="prompt-word">${escapeHtml(state.question.prompt)}</div>
     <div id="flashcard-answer" class="fs-3 fw-bold mt-3 d-none"></div>
@@ -406,9 +474,12 @@ async function submitAnswer(answer, resultType = null) {
 async function finishTraining() {
   try {
     const summary = await api(`/api/training/${state.sessionId}`);
+    const questionSummary = summary.total_questions > summary.target_questions
+      ? `${summary.total_questions} Fragen, davon ${summary.total_questions - summary.target_questions} Wiederholungen`
+      : `${summary.total_questions} / ${summary.target_questions} Fragen`;
     $("#training-area").innerHTML = `<div class="card question-card p-5 text-center">
       <div class="display-3">🎉</div><h2 class="mt-3">Toll gemacht!</h2>
-      <p>${summary.total_questions} / ${summary.target_questions} Fragen · ${summary.correct_answers} richtig · ${summary.partial_answers} fast richtig · ${summary.wrong_answers} falsch</p>
+      <p>${questionSummary} · ${summary.correct_answers} richtig · ${summary.partial_answers} fast richtig · ${summary.wrong_answers} falsch</p>
       <strong>${summary.score} Punkte</strong><br><button class="btn btn-primary rounded-pill mt-4" id="practice-again">Nochmal üben</button>
     </div>`;
     $("#practice-again").addEventListener("click", () => {
@@ -429,9 +500,12 @@ async function loadMatchingRound() {
   state.matched = new Set();
   state.selectedLeft = null;
   state.selectedRight = null;
+  const progress = state.totalQuestions >= state.targetQuestions
+    ? "Wiederholung"
+    : `${state.totalQuestions} / ${state.targetQuestions}`;
   $("#training-area").classList.remove("d-none");
   $("#training-area").innerHTML = `<div class="card question-card p-4">
-    <div class="d-flex justify-content-between"><h2 class="h4">Finde die passenden Wörter</h2><span>${state.totalQuestions} / ${state.targetQuestions}</span><button id="stop-training" class="btn btn-sm btn-outline-secondary rounded-pill">Beenden</button></div>
+    <div class="d-flex justify-content-between"><h2 class="h4">Finde die passenden Wörter</h2><span>${progress}</span><button id="stop-training" class="btn btn-sm btn-outline-secondary rounded-pill">Beenden</button></div>
     <div class="row g-3 mt-2"><div class="col-6"><div class="d-grid gap-2">${round.left.map((item) => `<button class="pair-button left-pair" data-id="${item.id}">${escapeHtml(item.text)}</button>`).join("")}</div></div>
     <div class="col-6"><div class="d-grid gap-2">${round.right.map((item) => `<button class="pair-button right-pair" data-id="${item.id}">${escapeHtml(item.text)}</button>`).join("")}</div></div></div>
     <div id="match-feedback" class="mt-3"></div>

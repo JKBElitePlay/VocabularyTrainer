@@ -71,6 +71,13 @@
       <div id="practice-setup" class="card p-4">
         <label class="form-label" for="practice-folder">Welche Mappe möchtest du üben?</label>
         <select id="practice-folder" class="form-select mb-3"></select>
+        <div class="form-check mb-3">
+          <input id="only-below-90-percent" class="form-check-input" type="checkbox">
+          <label class="form-check-label" for="only-below-90-percent">
+            Nur Vokabeln mit weniger als 90 % richtigen Antworten üben
+          </label>
+          <div class="form-text">Die eingestellte Anzahl begrenzt die Vokabeln aus dieser Auswahl.</div>
+        </div>
         <fieldset id="practice-categories" class="border rounded-3 p-3 mb-3 d-none">
           <legend class="float-none w-auto px-1 fs-6 fw-bold mb-1">Welche Kategorien möchtest du üben?</legend>
           <p id="category-count-summary" class="small text-secondary mb-2"></p>
@@ -88,12 +95,14 @@
             <option value="en-de">Englisch → Deutsch</option>
           </select>
         </div>
-        <label class="form-label" for="question-count">Anzahl Vokabeln</label>
-        <select id="question-count" class="form-select mb-4">
-          <option value="10">10</option><option value="20">20</option>
-          <option value="30">30</option><option value="50">50</option>
-          <option value="75">75</option><option value="100">100</option>
-        </select>
+        <div id="question-count-setting">
+          <label class="form-label" for="question-count">Anzahl Vokabeln</label>
+          <select id="question-count" class="form-select mb-4">
+            <option value="10">10</option><option value="20">20</option>
+            <option value="30">30</option><option value="50">50</option>
+            <option value="75">75</option><option value="100">100</option>
+          </select>
+        </div>
         <button id="start-practice" class="btn btn-primary rounded-pill px-4 align-self-start">Los geht's! 🚀</button>
       </div>
       <div id="training-area" class="d-none"></div>
